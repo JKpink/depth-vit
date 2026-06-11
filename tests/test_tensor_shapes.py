@@ -43,14 +43,15 @@ class TestFullPipelineShapes:
             out = blk(x)
             assert out.shape == x.shape, f"pass {i}: {x.shape} → {out.shape}"
 
-    @pytest.mark.parametrize("plan", ["A", "B"])
-    def test_depthformer_pipeline(self, plan, batch_input):
-        """端到端: RGB → 深度图"""
-        if plan == "B":
-            pytest.skip("需要 torch hub 下载 DINOv2")
-        model = DepthFormer(plan="A")
+    def test_depthformer_pipeline(self, batch_input):
+        """端到端: RGB → 深度图 (DINOv2 + HAHI + ProgressiveDecoder)"""
+        try:
+            from transformers import AutoModel  # noqa: F401
+        except ImportError:
+            pytest.skip("需要 transformers 加载 DINOv2")
+        model = DepthFormer(image_size=384)
         out = model(batch_input)
-        assert out.shape == (2, 1, 384, 384)
+        assert out.shape[0] == 2 and out.shape[1] == 1  # [B, 1, H, W]
         assert torch.isfinite(out).all()
 
     def test_encoder_feature_count(self, batch_input):

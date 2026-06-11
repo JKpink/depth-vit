@@ -1,12 +1,63 @@
 #!/bin/bash
 # 一键下载并解压 NYU Depth v2 数据集
-# 用法: bash setup_data.sh [数据目录，默认 ./data/nyu]
+# 用法:
+#   bash setup_data.sh                                 # 直连下载
+#   bash setup_data.sh --proxy                         # 代理 127.0.0.1:7890
+#   bash setup_data.sh --proxy 7890                    # 代理 127.0.0.1:指定端口
+#   bash setup_data.sh --proxy 192.168.1.100:7890      # 代理 指定IP:端口
+#   bash setup_data.sh --no-proxy                      # 强制直连
+#   bash setup_data.sh /path/to/data --proxy 192.168.1.100:7890
 
 set -e
 
-DATA_DIR="${1:-data/nyu}"
-MAT_FILE="/tmp/nyu_depth_v2_labeled.mat"
-URL="http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/nyu_depth_v2_labeled.mat"
+DATA_DIR="data/nyu"
+USE_PROXY=""
+PROXY_ADDR=""
+
+# ── 参数解析 ──
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --proxy)
+            USE_PROXY="yes"
+            shift
+            if [[ $# -gt 0 && ! "$1" =~ ^- ]]; then
+                PROXY_ADDR="$1"
+                shift
+            fi
+            ;;
+        --no-proxy)
+            USE_PROXY="no"
+            shift
+            ;;
+        -*)
+            echo "未知参数: $1"
+            echo "用法: bash setup_data.sh [数据目录] [--proxy [ip:port]] [--no-proxy]"
+            exit 1
+            ;;
+        *)
+            DATA_DIR="$1"
+            shift
+            ;;
+    esac
+done
+
+# ── 解析代理地址 ──
+if [[ "$USE_PROXY" == "yes" ]]; then
+    if [[ -z "$PROXY_ADDR" ]]; then
+        PROXY_ADDR="127.0.0.1:7890"
+    elif [[ "$PROXY_ADDR" =~ ^[0-9]+$ ]]; then
+        # 纯数字 → 端口，IP 默认 127.0.0.1
+        PROXY_ADDR="127.0.0.1:${PROXY_ADDR}"
+    elif [[ ! "$PROXY_ADDR" =~ : ]]; then
+        # 只有 IP 没有端口 → 补默认端口
+        PROXY_ADDR="${PROXY_ADDR}:7890"
+    fi
+    echo "使用代理: http://${PROXY_ADDR}"
+    export http_proxy="http://${PROXY_ADDR}"
+    export https_proxy="http://${PROXY_ADDR}"
+else
+    echo "直连下载（不使用代理）"
+fi
 
 echo "=== 1. 下载 NYU Depth v2 ==="
 if [ -f "$MAT_FILE" ]; then

@@ -28,6 +28,9 @@ class SSIM(nn.Module):
         self.window_size = window_size
 
     def forward(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+        # 强制 float32 防止 autocast 下精度不够产生 NaN
+        pred = pred.float()
+        gt = gt.float()
         C1 = 0.01 ** 2
         C2 = 0.03 ** 2
         mu_p = F.avg_pool2d(pred, self.window_size, 1)
@@ -76,6 +79,17 @@ class DepthLoss(nn.Module):
                                    size=pred.shape[-2:], mode="bilinear", align_corners=False)
                      > self.grad_threshold).float().mean()
 
+        # δ1: 每张图独立算，避免 batch 像素混在一起
+        delta1 = 0.0
+        valid = gt > 0.01
+        if valid.any():
+            with torch.no_grad():
+                ratio = torch.max(
+                    pred.float() / gt.float().clamp(min=0.01),
+                    gt.float() / pred.float().clamp(min=0.01),
+                )
+                delta1 = (ratio < 1.25).float().mean().item()
+
         total = self.lambda_l1 * l1 + self.lambda_ssim * ssim_loss + self.lambda_grad * grad_l
 
         metrics = {
@@ -83,6 +97,40 @@ class DepthLoss(nn.Module):
             "ssim": ssim_loss.item(),
             "grad": grad_l.item(),
             "edge_ratio": edge_mask.item(),
+            "delta1": delta1,
             "total": total.item(),
         }
         return total, metrics
+
+
+class SiLogLoss(nn.Module):
+    """Scale-Invariant Logarithmic Loss (对齐 DA-V2)
+    L = sqrt(α * mean(d²) - λ * mean(d)²)  where d = log(pred) - log(gt)
+    """
+
+    def __init__(self, var_lambda: float = 0.85):
+        super().__init__()
+        self.var_lambda = var_lambda
+
+    def forward(self, pred: torch.Tensor, gt: torch.Tensor) -> Tuple[torch.Tensor, dict]:
+        if pred.shape[-2:] != gt.shape[-2:]:
+            pred = F.interpolate(pred, size=gt.shape[-2:], mode="bilinear", align_corners=False)
+
+        valid = gt > 0.1  # 排除无效像素
+        if valid.any():
+            pred = pred[valid]
+            gt = gt[valid]
+            diff = torch.log(pred.clamp(min=1e-4)) - torch.log(gt.clamp(min=1e-4))
+            loss = torch.sqrt((diff ** 2).mean() - self.var_lambda * diff.mean() ** 2)
+        else:
+            loss = torch.tensor(0.0, device=pred.device, requires_grad=True)
+
+        # δ1 for monitoring
+        valid_mon = (gt > 0.01) if pred.numel() == 0 else (gt > 0.01)
+        with torch.no_grad():
+            ratio = torch.max(pred / gt.clamp(min=0.01), gt / pred.clamp(min=0.01))
+            delta1 = (ratio < 1.25).float().mean().item()
+
+        metrics = {"l1": loss.item(), "ssim": 0.0, "grad": 0.0,
+                    "edge_ratio": 0.0, "delta1": delta1, "total": loss.item()}
+        return loss, metrics

@@ -1,44 +1,19 @@
 # DepthFormer 配置
 
-# Plan A: 单独设计-ViT
-plan_a:
-  encoder: "vit_custom"
-  image_size: [384, 384]
-  patch_size: 16
-  num_layers: 12
-  embed_dim: 384
-  num_heads: 6
-  mlp_ratio: 4
-  pretrained: false
-
-# Plan B: 冻结DINOv2
-plan_b:
-  encoder: "dinov2_small"
-  freeze_encoder: true
-  image_size: [384, 384]
-
-# 解码器（A+B共用）
-decoder:
-  num_scales: 3          # L4, L8, L12 三层特征
-  feature_dims: [384, 384, 384]
-  decoder_dims: [192, 96, 48]
-  output_size: [384, 384]
-
-# 损失函数
-loss:
-  lambda_l1: 0.6
-  lambda_ssim: 0.3
-  lambda_grad: 0.1
-  grad_threshold: 0.05   # 梯度图阈值（用于边界mask）
-
 # 训练
 training:
-  batch_size: 32
-  epochs: 100
-  lr: 0.0001
-  weight_decay: 0.0001
-  warmup_epochs: 5
+  batch_size: 16
+  epochs: 40
+  lr: 0.00001       # neck+decoder: 1e-5, encoder: 1e-6
+  weight_decay: 0.01
+  warmup_epochs: 0
   grad_clip: 1.0
+  image_size: 504     # 504 = 36 × 14, 整除 DINOv2 patch
+  lr_decay_power: 0.9 # 多项式 LR 衰减
+
+# 损失函数 (对齐 DA-V2)
+loss:
+  type: silog
 
 # 优化器
 optimizer:
@@ -51,3 +26,9 @@ data:
   train_split: "train"
   val_split: "val"
   num_workers: 4
+
+# 模型
+model:
+  neck_dim: 256
+  num_heads: 8
+  feature_layers: [2, 5, 8, 11]

@@ -1,71 +1,54 @@
-"""DepthFormer 完整模型 —— Plan A 或 Plan B 统一接口"""
+"""DepthFormer v2 —— DINOv2 + HAHI Neck + ProgressiveDecoder"""
 
-from typing import Literal
+from typing import List
 import torch
 import torch.nn as nn
 
-from .vit_encoder import CustomViTEncoder
 from .dino_encoder import FrozenDINOv2Encoder
-from .reassemble import MultiScaleReassemble
-from .decoder import DepthDecoder
+from .hahi_neck import HAHINeckLight
+from .decoder import ProgressiveDecoder
 
 
 class DepthFormer(nn.Module):
-    """深度估计模型
+    """深度估计模型 v2 — DINOv2 编码器 + HAHI 特征融合 + 渐进解码器
 
     Args:
-        plan: "A" (自研ViT) 或 "B" (冻结DINOv2)
         image_size: 输入分辨率
-        embed_dim: Token 嵌入维度（仅 Plan A 有效）
-        num_layers: ViT 层数（仅 Plan A 有效）
-        num_heads: 注意力头数（仅 Plan A 有效）
+        neck_dim: HAHI 输出通道数
+        num_heads: 注意力头数
     """
 
     def __init__(
         self,
-        plan: Literal["A", "B"] = "A",
         image_size: int = 384,
-        embed_dim: int = 384,
-        num_layers: int = 12,
-        num_heads: int = 6,
+        neck_dim: int = 256,
+        num_heads: int = 8,
     ):
         super().__init__()
-        self.plan = plan
         self.image_size = image_size
 
-        # ── Encoder ──
-        if plan == "A":
-            self.encoder = CustomViTEncoder(
-                img_size=image_size, embed_dim=embed_dim,
-                num_layers=num_layers, num_heads=num_heads,
-            )
-            patch_size = 16
-            encoder_dim = embed_dim
-        else:  # plan == "B"
-            self.encoder = FrozenDINOv2Encoder(
-                model_name="dinov2_vits14", image_size=image_size,
-            )
-            patch_size = 14
-            encoder_dim = self.encoder.embed_dim  # 384
+        # ── Encoder: frozen DINOv2-S/14 ──
+        self.encoder = FrozenDINOv2Encoder(
+            model_name="dinov2_vits14", image_size=image_size,
+        )
+        embed_dim = self.encoder.embed_dim   # 384
+        patch_size = self.encoder.patch_size  # 14
 
-        # ── Token → 特征图 ──
-        target_size = image_size // (patch_size // 2) if plan == "A" else image_size // 14 * 2
-        if plan == "A":
-            target_size = 48  # 384/8
-        else:
-            target_size = 54  # 384/14*2
-
-        self.reassemble = MultiScaleReassemble(
-            image_size=image_size, patch_size=patch_size,
-            embed_dim=encoder_dim, target_size=target_size,
+        # ── Neck: HAHI token 跨尺度融合 ──
+        self.neck = HAHINeckLight(
+            embed_dim=embed_dim,
+            out_dim=neck_dim,
+            num_heads=num_heads,
+            num_layers=4,
+            patch_size=patch_size,
+            image_size=image_size,
         )
 
-        # ── 解码器 ──
-        decoder_in = encoder_dim * 3  # L4+L8+L12 concat
-        self.decoder = DepthDecoder(in_channels=decoder_in)
+        # ── Decoder: FeatureFusionBlock + sigmoid ──
+        self.decoder = ProgressiveDecoder(features=neck_dim, num_stages=4)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        features = self.encoder(x)           # [L4, L8, L12]
-        fused = self.reassemble(features)    # [B, 3D, T, T]
-        depth = self.decoder(fused)          # [B, 1, H, W]
+        tokens = self.encoder(x)             # [L0, L4, L8, L11], each [B, N, 384]
+        feats = self.neck(tokens)            # [feat0..feat3], each [B, 256, H, W]
+        depth = self.decoder(feats)          # [B, 1, ~H, ~W]
         return depth

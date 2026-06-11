@@ -56,12 +56,7 @@ class NYUDepthDataset(Dataset):
         self.depth_transform = self._build_depth_transform()
 
     def _build_rgb_transform(self):
-        t = [transforms.Resize((self.image_size, self.image_size))]
-        if self.augment:
-            t += [
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05),
-            ]
-        t += [transforms.ToTensor()]
+        t = [transforms.Resize((self.image_size, self.image_size)), transforms.ToTensor()]
         return transforms.Compose(t)
 
     def _build_depth_transform(self):
@@ -75,10 +70,10 @@ class NYUDepthDataset(Dataset):
         else:
             depth = np.array(Image.open(str(path)), dtype=np.float32)
 
-        # 归一化到 [0, 10m] → [0, 1]
+        # 保留米单位 [0, 10m] (对齐 DA-V2)
         if depth.max() > 20:  # 可能是毫米单位
             depth = depth / 1000.0
-        depth = np.clip(depth, 0.0, 10.0) / 10.0
+        depth = np.clip(depth, 0.0, 10.0)
         return torch.from_numpy(depth).unsqueeze(0)  # [1, H, W]
 
     def __len__(self) -> int:
@@ -89,15 +84,9 @@ class NYUDepthDataset(Dataset):
 
         depth_path = self.depth_files[idx]
         depth = self._load_depth(depth_path)
+        depth = self.depth_transform(depth)
 
-        # 统一尺寸
-        if depth.shape[-2:] != (self.image_size, self.image_size):
-            depth = transforms.functional.resize(
-                depth, (self.image_size, self.image_size),
-                interpolation=transforms.InterpolationMode.NEAREST,
-            )
-
-        # 水平翻转同步
+        # 仅水平翻转（对齐 DA-V2）
         if self.augment and torch.rand(1).item() > 0.5:
             rgb = transforms.functional.hflip(rgb)
             depth = transforms.functional.hflip(depth)
