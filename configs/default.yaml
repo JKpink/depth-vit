@@ -1,6 +1,6 @@
 # DepthFormer 配置
 
-# Plan A: 自研ViT
+# Plan A: 单独设计-ViT
 plan_a:
   encoder: "vit_custom"
   image_size: [384, 384]
